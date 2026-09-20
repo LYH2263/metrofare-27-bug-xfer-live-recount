@@ -1,5 +1,3 @@
-import json
-
 from app.db import connect
 from app.engines.route_quote import quote_route
 from app.modules.transfer_penalty import repository as transfer_repo
@@ -70,23 +68,9 @@ class MetroService:
         return runs_repo.list_recent(self._conn, limit)
 
     def history_item(self, run_id: int):
-        row = runs_repo.get_by_id(self._conn, run_id)
-        if row is None:
-            return None
-        result = json.loads(row["result_json"])
-        path = result.get("path") or []
-        live_count = max(len(path) - 1, 0) if path else 0
-        active = transfer_repo.list_active(self._conn)
-        unit = float(active[0]["surcharge"]) if active else 0.0
-        live_surcharge = round(live_count * unit, 2)
-        base = result.get("base_fare")
-        result["transfer_count"] = live_count
-        result["surcharge_total"] = live_surcharge
-        if base is not None:
-            result["fare"] = round(float(base) + live_surcharge, 2)
-        row = dict(row)
-        row["result_json"] = json.dumps(result, ensure_ascii=False)
-        return row
+        # 记录是写入当时的快照:途经、换乘次数、加价、应付一律按落库原样返回,
+        # 不随规则停用/改价重算。
+        return runs_repo.get_by_id(self._conn, run_id)
 
     def dashboard(self):
         st = stations_repo.list_all(self._conn)

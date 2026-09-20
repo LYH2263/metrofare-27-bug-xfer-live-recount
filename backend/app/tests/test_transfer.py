@@ -137,5 +137,18 @@ def test_readonly_quote_writes_no_record_and_snapshot_is_immutable():
             # 已写入记录仍带当时途经站与当时加价
             assert snap["path"] == ["A1", "A2", "B1", "B2"]
             assert snap["surcharge_total"] == 2.0 and snap["fare"] == 6.0
+
+            # 记录页按编号取回的仍是写入当时那一版,不被停用/改规则改写
+            viewed = json.loads(s.history_item(qp["run_id"])["result_json"])
+            assert viewed["path"] == ["A1", "A2", "B1", "B2"]
+            assert viewed["transfer_count"] == 1
+            assert viewed["surcharge_total"] == 2.0 and viewed["fare"] == 6.0
+
+            # 连续两次只读试算之间记录条数不增加
+            n_before = conn.execute("SELECT COUNT(*) c FROM calc_runs").fetchone()["c"]
+            s.quote("A1", "B2", persist=False)
+            s.quote("A1", "B2", persist=False)
+            n_after = conn.execute("SELECT COUNT(*) c FROM calc_runs").fetchone()["c"]
+            assert n_after == n_before
     finally:
         conn.close()

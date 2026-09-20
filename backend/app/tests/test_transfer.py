@@ -16,6 +16,7 @@ from app.modules.transfer_penalty.service import (
     deactivate_rule,
     update_rule,
 )
+from app.repositories import runs as runs_repo
 from app.services.metro_service import MetroService
 
 L1, L2 = "1号线", "支线"
@@ -137,5 +138,40 @@ def test_readonly_quote_writes_no_record_and_snapshot_is_immutable():
             # 已写入记录仍带当时途经站与当时加价
             assert snap["path"] == ["A1", "A2", "B1", "B2"]
             assert snap["surcharge_total"] == 2.0 and snap["fare"] == 6.0
+    finally:
+        conn.close()
+
+
+def test_history_item_returns_snapshot_not_live_recompute():
+    """记录页再打开看到的就是按编号取出的落库原文,不随规则停用/改价重算。"""
+    conn = _mem_db()
+    try:
+        with MetroService(conn) as s:
+            qp = s.quote("A1", "B2", persist=True)
+            run_id = qp["run_id"]
+            assert run_id is not None
+            assert qp["transfer_count"] == 1 and qp["surcharge_total"] == 2.0
+
+            # 记录页详情 == 按编号取出的写入当时那一版
+            assert s.history_item(run_id) == runs_repo.get_by_id(conn, run_id)
+
+            # 停用全部规则:旧记录不被改写,新只读试算加价为零
+            s.deactivate_transfer_rule(1)
+            s.deactivate_transfer_rule(2)
+            snap = json.loads(s.history_item(run_id)["result_json"])
+            assert snap["path"] == ["A1", "A2", "B1", "B2"]
+            assert snap["transfer_count"] == 1
+            assert snap["surcharge_total"] == 2.0
+            assert snap["base_fare"] == 4.0 and snap["fare"] == 6.0
+            q0 = s.quote("A1", "B2", persist=False)
+            assert q0["surcharge_total"] == 0.0 and q0["fare"] == 4.0
+
+            # 改规则金额并重新启用:旧记录仍不改写,新试算按当前规则计
+            s.update_transfer_rule(1, surcharge=9.9, active=True)
+            snap2 = json.loads(s.history_item(run_id)["result_json"])
+            assert snap2["transfer_count"] == 1 and snap2["surcharge_total"] == 2.0
+            assert snap2["fare"] == 6.0
+            q1 = s.quote("A1", "B2", persist=False)
+            assert q1["surcharge_total"] == 9.9 and q1["fare"] == 13.9
     finally:
         conn.close()
